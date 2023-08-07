@@ -43,6 +43,8 @@
 #define CONFIG_MODEL_W 1
 #define CONFIG_MODEL_H 1
 #define CONFIG_MODEL_D 1
+#define CONFIG_D3D11_FILLMODE D3D11_FILL_SOLID
+#define CONFIG_D3D11_CULL D3D11_CULL_BACK
 
 /* macros */
 #define ASSERT(s)                                                       \
@@ -145,8 +147,17 @@ struct {
     } model;
     float delta;
     unsigned char keys[256];
+    unsigned char prev_keys[256];
     HWND window;
 } state;
+
+BOOL key_down(unsigned char key) {
+    if (state.keys[key] != state.prev_keys[key]) {
+        return state.keys[key];
+    }
+
+    return FALSE;
+}
 
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmdline, int showcmd) {
     /* applying configs */
@@ -437,9 +448,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmdline, i
     ID3D11RasterizerState * rasterizerstate;
     {
         D3D11_RASTERIZER_DESC desc = {
-            .FillMode = D3D11_FILL_SOLID,
-            // TODO: back-face culling
-            .CullMode = D3D11_CULL_NONE,
+            .FillMode = CONFIG_D3D11_FILLMODE,
+            .CullMode = CONFIG_D3D11_CULL,
         };
         D3D11_ASSERT(dev->lpVtbl->CreateRasterizerState(dev, &desc, &rasterizerstate));
     }
@@ -524,142 +534,33 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmdline, i
             if (state.keys[VK_DOWN]) {
                 state.camera.rot[0] -= state.delta * sens;
             }
+            if (state.keys[VK_MULTIPLY]) {
+                state.model.rot[2] += state.delta * sens;
+            }
+            if (state.keys[VK_DIVIDE]) {
+                state.model.rot[2] -= state.delta * sens;
+            }
+            if (state.keys[VK_NUMPAD6]) {
+                state.model.rot[1] += state.delta * sens;
+            }
+            if (state.keys[VK_NUMPAD4]) {
+                state.model.rot[1] -= state.delta * sens;
+            }
+            if (state.keys[VK_NUMPAD8]) {
+                state.model.rot[0] += state.delta * sens;
+            }
+            if (state.keys[VK_NUMPAD2]) {
+                state.model.rot[0] -= state.delta * sens;
+            }
 
             state.camera.rot[0] += -state.delta_mouse_y * mouse_sens * state.delta;
             state.camera.rot[1] += state.delta_mouse_x * mouse_sens * state.delta;
-        }
-
-        /* render */
-        RECT rect;
-        GetClientRect(window, &rect);
-        state.window_width = rect.right - rect.left;
-        state.window_height = rect.bottom - rect.top;
-
-        if (state.window_width != prev_w || state.window_height != prev_h) {
-            if (render_target != NULL) {
-                devcontext->lpVtbl->ClearState(devcontext);
-                render_target->lpVtbl->Release(render_target);
-                render_target = NULL;
-            }
-
-            D3D11_ASSERT(swapchain->lpVtbl->ResizeBuffers(swapchain, 0, state.window_width, state.window_height, DXGI_FORMAT_R8G8B8A8_UNORM, 0));
-            ID3D11Texture2D * backbuffer;
-            D3D11_ASSERT(swapchain->lpVtbl->GetBuffer(swapchain, 0, &IID_ID3D11Texture2D, &backbuffer));
-            D3D11_ASSERT(dev->lpVtbl->CreateRenderTargetView(dev, (ID3D11Resource *) backbuffer, NULL, &render_target));
-            backbuffer->lpVtbl->Release(backbuffer);
-        }
-
-        prev_w = state.window_width;
-        prev_h = state.window_height;
-
-        if (render_target != NULL) {
-            LARGE_INTEGER c2;
-            QueryPerformanceCounter(&c2);
-            state.delta = (float) ((c2.QuadPart - c1.QuadPart) / (double) freq.QuadPart);
-            c1 = c2;
-            D3D11_VIEWPORT viewport = {
-                .TopLeftX = 0,
-                .TopLeftY = 0,
-                .Width = (float) state.window_width,
-                .Height = (float) state.window_height,
-                .MinDepth = 0,
-                .MaxDepth = 1,
-            };
-
-            float color[4] = { 0.06f, 0.03f, 0.12f, 1.0f };
-            devcontext->lpVtbl->ClearRenderTargetView(devcontext, render_target, color);
-
-            {
-                float ratio = state.window_width / (float) state.window_height;
-                mat4x4 m, v, p, mvp;
-                mat4x4_identity(m);
-                mat4x4_identity(v);
-                mat4x4_identity(p);
-                mat4x4_identity(mvp);
-
-                /* model to world */
-                mat4x4_scale_aniso(m, m, state.model.scale[0], state.model.scale[1], state.model.scale[2]);
-                mat4x4_rotate_X(m, m, state.model.rot[0] * (3.141592f / 180.0f));
-                mat4x4_rotate_Y(m, m, state.model.rot[1] * (3.141592f / 180.0f));
-                mat4x4_rotate_Z(m, m, state.model.rot[2] * (3.141592f / 180.0f));
-                mat4x4_translate(m, state.model.pos[0], state.model.pos[1], state.model.pos[2]);
-
-                /* world to camera */
-                mat4x4_translate(v, -state.camera.pos[0], -state.camera.pos[1], state.camera.pos[2]);
-
-                /* projection matrix */
-                mat4x4_perspective(p, state.camera.fov * (3.141592f / 180.0f), ratio, state.camera.near_plane, state.camera.far_plane);
-                mat4x4_scale_aniso(p, p, state.camera.scale[0], state.camera.scale[1], state.camera.scale[2]);
-                mat4x4_rotate_X(p, p, -state.camera.rot[0] * (3.141592f / 180.0f));
-                mat4x4_rotate_Y(p, p, state.camera.rot[1] * (3.141592f / 180.0f));
-                mat4x4_rotate_Z(p, p, state.camera.rot[2] * (3.141592f / 180.0f));
-
-                mat4x4_mul(mvp, mvp, p);
-                mat4x4_mul(mvp, mvp, v);
-                mat4x4_mul(mvp, mvp, m);
-
-                D3D11_MAPPED_SUBRESOURCE mapped;
-                D3D11_ASSERT(devcontext->lpVtbl->Map(devcontext, (ID3D11Resource *) ubuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-                CopyMemory(mapped.pData, mvp, sizeof(mvp));
-                devcontext->lpVtbl->Unmap(devcontext, (ID3D11Resource *) ubuffer, 0);
-            }
-
-            devcontext->lpVtbl->IASetInputLayout(devcontext, layout);
-            devcontext->lpVtbl->IASetPrimitiveTopology(devcontext, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            UINT stride = sizeof(vertex_t);
-            UINT offset = 0;
-            devcontext->lpVtbl->IASetVertexBuffers(devcontext, 0, 1, &vbo, &stride, &offset);
-
-            devcontext->lpVtbl->VSSetConstantBuffers(devcontext, 0, 1, &ubuffer);
-            devcontext->lpVtbl->VSSetShader(devcontext, vertex_shader, NULL, 0);
-
-            devcontext->lpVtbl->RSSetViewports(devcontext, 1, &viewport);
-            devcontext->lpVtbl->RSSetState(devcontext, rasterizerstate);
-
-            devcontext->lpVtbl->PSSetSamplers(devcontext, 0, 1, &sampler);
-            devcontext->lpVtbl->PSSetShaderResources(devcontext, 0, 1, &texture_view);
-            devcontext->lpVtbl->PSSetShader(devcontext, pixel_shader, NULL, 0);
-
-            devcontext->lpVtbl->OMSetBlendState(devcontext, blendstate, NULL, ~0U);
-            devcontext->lpVtbl->OMSetRenderTargets(devcontext, 1, &render_target, NULL);
-
-            devcontext->lpVtbl->Draw(devcontext, 3, 0);
-        }
-
-        state.scroll_delta = 0;
-        state.delta_mouse_x = 0;
-        state.delta_mouse_y = 0;
-
-        D3D11_ASSERT(swapchain->lpVtbl->Present(swapchain, 1, 0));
-        MSG msg;
-        if (PeekMessageA(&msg, window, 0, 0, PM_REMOVE) != 0) {
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-        }
-    }
-
-    return 0;
-}
-
-static LRESULT APIENTRY window_proc(HWND win, UINT msg, WPARAM wparam, LPARAM lparam) {
-    unsigned char key;
-    switch (msg) {
-        case WM_QUIT:
-            state.running = FALSE;
-            PostQuitMessage(69);
-            break;
-        case WM_DESTROY:
-            state.running = FALSE;
-            break;
-        case WM_SYSKEYDOWN:
-        case WM_KEYDOWN:;
-            key = LOWORD(wparam);
-            if (key == VK_ESCAPE) {
+            if (state.keys[VK_ESCAPE] == 1) {
                 state.mouse_lock = !state.mouse_lock;
                 state.mouse_hide = state.mouse_lock;
                 ShowCursor(state.mouse_hide);
             }
-            if (key == VK_F1) {
+            if (state.keys[VK_F2] == 1) {
                 MessageBoxAF("state",
                     "running = %s\n"
                     "mouse_x = %i\n"
@@ -731,12 +632,12 @@ static LRESULT APIENTRY window_proc(HWND win, UINT msg, WPARAM wparam, LPARAM lp
                             state.camera.scale[1],
                             state.camera.scale[2],
                         /* } */
-                        state.camera.fov,
-                        state.camera.near_plane,
-                        state.camera.far_plane,
-                    /* } */
-                    /* model { */
-                        /* pos { */
+                            state.camera.fov,
+                            state.camera.near_plane,
+                            state.camera.far_plane,
+                        /* } */
+                        /* model { */
+                            /* pos { */
                             state.model.pos[0],
                             state.model.pos[1],
                             state.model.pos[2],
@@ -755,7 +656,152 @@ static LRESULT APIENTRY window_proc(HWND win, UINT msg, WPARAM wparam, LPARAM lp
                     state.delta
                 );
             }
+            if (key_down(VK_F3)) {
+                D3D11_RASTERIZER_DESC desc;
+                rasterizerstate->lpVtbl->GetDesc(rasterizerstate, &desc);
+                rasterizerstate->lpVtbl->Release(rasterizerstate);
+                desc.FillMode = !(desc.FillMode - 2) + 2;
+                D3D11_ASSERT(dev->lpVtbl->CreateRasterizerState(dev, &desc, &rasterizerstate));
+            }
+            if (key_down(VK_F4)) {
+                D3D11_RASTERIZER_DESC desc;
+                rasterizerstate->lpVtbl->GetDesc(rasterizerstate, &desc);
+                rasterizerstate->lpVtbl->Release(rasterizerstate);
+                desc.CullMode += 1;
+                if (desc.CullMode > D3D11_CULL_BACK) {
+                    desc.CullMode = D3D11_CULL_NONE;
+                }
+                D3D11_ASSERT(dev->lpVtbl->CreateRasterizerState(dev, &desc, &rasterizerstate));
+            }
+        }
+
+        /* render */
+        RECT rect;
+        GetClientRect(window, &rect);
+        state.window_width = rect.right - rect.left;
+        state.window_height = rect.bottom - rect.top;
+
+        if (state.window_width != prev_w || state.window_height != prev_h) {
+            if (render_target != NULL) {
+                devcontext->lpVtbl->ClearState(devcontext);
+                render_target->lpVtbl->Release(render_target);
+                render_target = NULL;
+            }
+
+            D3D11_ASSERT(swapchain->lpVtbl->ResizeBuffers(swapchain, 0, state.window_width, state.window_height, DXGI_FORMAT_R8G8B8A8_UNORM, 0));
+            ID3D11Texture2D * backbuffer;
+            D3D11_ASSERT(swapchain->lpVtbl->GetBuffer(swapchain, 0, &IID_ID3D11Texture2D, &backbuffer));
+            D3D11_ASSERT(dev->lpVtbl->CreateRenderTargetView(dev, (ID3D11Resource *) backbuffer, NULL, &render_target));
+            backbuffer->lpVtbl->Release(backbuffer);
+        }
+
+        prev_w = state.window_width;
+        prev_h = state.window_height;
+
+        if (render_target != NULL) {
+            LARGE_INTEGER c2;
+            QueryPerformanceCounter(&c2);
+            state.delta = (float) ((c2.QuadPart - c1.QuadPart) / (double) freq.QuadPart);
+            c1 = c2;
+            D3D11_VIEWPORT viewport = {
+                .TopLeftX = 0,
+                .TopLeftY = 0,
+                .Width = (float) state.window_width,
+                .Height = (float) state.window_height,
+                .MinDepth = 0,
+                .MaxDepth = 1,
+            };
+
+            float color[4] = { 0.06f, 0.03f, 0.12f, 1.0f };
+            devcontext->lpVtbl->ClearRenderTargetView(devcontext, render_target, color);
+
+            {
+                float ratio = state.window_width / (float) state.window_height;
+                mat4x4 m, v, p, mvp;
+                mat4x4_identity(m);
+                mat4x4_identity(v);
+                mat4x4_identity(p);
+                mat4x4_identity(mvp);
+
+                /* model to world */
+                mat4x4_translate(m, state.model.pos[0], state.model.pos[1], state.model.pos[2]);
+                mat4x4_rotate_X(m, m, state.model.rot[0] * (3.141592f / 180.0f));
+                mat4x4_rotate_Y(m, m, state.model.rot[1] * (3.141592f / 180.0f));
+                mat4x4_rotate_Z(m, m, state.model.rot[2] * (3.141592f / 180.0f));
+                mat4x4_scale_aniso(m, m, state.model.scale[0], state.model.scale[1], state.model.scale[2]);
+
+                /* world to camera */
+                mat4x4_translate(v, -state.camera.pos[0], -state.camera.pos[1], state.camera.pos[2]);
+
+                /* projection matrix */
+                mat4x4_perspective(p, state.camera.fov * (3.141592f / 180.0f), ratio, state.camera.near_plane, state.camera.far_plane);
+                mat4x4_scale_aniso(p, p, state.camera.scale[0], state.camera.scale[1], state.camera.scale[2]);
+                mat4x4_rotate_X(p, p, -state.camera.rot[0] * (3.141592f / 180.0f));
+                mat4x4_rotate_Y(p, p, state.camera.rot[1] * (3.141592f / 180.0f));
+                mat4x4_rotate_Z(p, p, state.camera.rot[2] * (3.141592f / 180.0f));
+
+                mat4x4_mul(mvp, mvp, p);
+                mat4x4_mul(mvp, mvp, v);
+                mat4x4_mul(mvp, mvp, m);
+
+                D3D11_MAPPED_SUBRESOURCE mapped;
+                D3D11_ASSERT(devcontext->lpVtbl->Map(devcontext, (ID3D11Resource *) ubuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+                CopyMemory(mapped.pData, mvp, sizeof(mvp));
+                devcontext->lpVtbl->Unmap(devcontext, (ID3D11Resource *) ubuffer, 0);
+            }
+
+            devcontext->lpVtbl->IASetInputLayout(devcontext, layout);
+            devcontext->lpVtbl->IASetPrimitiveTopology(devcontext, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            UINT stride = sizeof(vertex_t);
+            UINT offset = 0;
+            devcontext->lpVtbl->IASetVertexBuffers(devcontext, 0, 1, &vbo, &stride, &offset);
+
+            devcontext->lpVtbl->VSSetConstantBuffers(devcontext, 0, 1, &ubuffer);
+            devcontext->lpVtbl->VSSetShader(devcontext, vertex_shader, NULL, 0);
+
+            devcontext->lpVtbl->RSSetViewports(devcontext, 1, &viewport);
+            devcontext->lpVtbl->RSSetState(devcontext, rasterizerstate);
+
+            devcontext->lpVtbl->PSSetSamplers(devcontext, 0, 1, &sampler);
+            devcontext->lpVtbl->PSSetShaderResources(devcontext, 0, 1, &texture_view);
+            devcontext->lpVtbl->PSSetShader(devcontext, pixel_shader, NULL, 0);
+
+            devcontext->lpVtbl->OMSetBlendState(devcontext, blendstate, NULL, ~0U);
+            devcontext->lpVtbl->OMSetRenderTargets(devcontext, 1, &render_target, NULL);
+
+            devcontext->lpVtbl->Draw(devcontext, 3, 0);
+        }
+
+        state.scroll_delta = 0;
+        state.delta_mouse_x = 0;
+        state.delta_mouse_y = 0;
+
+        D3D11_ASSERT(swapchain->lpVtbl->Present(swapchain, 1, 0));
+        MSG msg;
+        if (PeekMessageA(&msg, window, 0, 0, PM_REMOVE) != 0) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
+
+    return 0;
+}
+
+static LRESULT APIENTRY window_proc(HWND win, UINT msg, WPARAM wparam, LPARAM lparam) {
+    unsigned char key;
+    switch (msg) {
+        case WM_QUIT:
+            state.running = FALSE;
+            PostQuitMessage(69);
+            break;
+        case WM_DESTROY:
+            state.running = FALSE;
+            break;
+        case WM_SYSKEYDOWN:
+        case WM_KEYDOWN:;
+            key = LOWORD(wparam);
             if (key < 256) {
+                state.prev_keys[key] = state.keys[key];
                 state.keys[key] = 1;
             }
             break;
@@ -763,6 +809,7 @@ static LRESULT APIENTRY window_proc(HWND win, UINT msg, WPARAM wparam, LPARAM lp
         case WM_KEYUP:;
             key = LOWORD(wparam);
             if (key < 256) {
+                state.prev_keys[key] = state.keys[key];
                 state.keys[key] = 0;
             }
             break;
